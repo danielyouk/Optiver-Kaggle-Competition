@@ -8,6 +8,29 @@ library(reticulate)
 library(arrow)
 library(tictoc)
 
+list.of.packages <- c(
+  "foreach",
+  "doParallel",
+  "ranger",
+  "palmerpenguins",
+  "tidyverse",
+  "kableExtra"
+)
+
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+
+if(length(new.packages) > 0){
+  install.packages(new.packages, dep=TRUE)
+}
+
+for(package.i in list.of.packages){
+  suppressPackageStartupMessages(
+    library(
+      package.i, 
+      character.only = TRUE
+    )
+  )
+}
 # file_name <- list.files('./input/optiver-realized-volatility-prediction/book_train.parquet/stock_id=0')
 # book_example <- read_parquet(paste0("./input/optiver-realized-volatility-prediction/book_train.parquet/stock_id=0/",file_name)) %>% as.data.table()
 # file_name <- list.files('./input/optiver-realized-volatility-prediction/trade_train.parquet/stock_id=0')
@@ -189,12 +212,38 @@ preprocessor <- function (stock_id){
 
 tic()
 train <- data.table()
-for (stock_id_input in stock_id_list){
-  #stock_id_input = stock_id_list[1]
+i <-0
+for (stock_id_input in stock_id_list[1:10]){
+  i <- i +1; t1 <- Sys.time()
   train_each <- preprocessor(stock_id = stock_id_input)
   train <- rbind(train, train_each)
+  t2 <- Sys.time()
+  timediff <- difftime(t2,t1, units = "secs")
+  print(paste0(i, " duration ",timediff, " sec"))
   
 }
+toc()
+
+parallel::detectCores()
+n.cores <- parallel::detectCores() - 1
+my.cluster <- parallel::makeCluster(
+  n.cores, 
+  type = "PSOCK"
+)
+print(my.cluster)
+
+tic()
+doParallel::registerDoParallel(cl = my.cluster)
+
+train <- foreach(
+  stock_id_input = stock_id_list,
+  .combine = "rbind",
+  .packages = c("tidyverse","data.table","arrow")
+) %dopar% {
+  preprocessor(stock_id = stock_id_input)
+}
+
+parallel::stopCluster(cl = my.cluster)
 toc()
 # cols_python_object <- names(py$train_)
 # cols_r_object <-names(train)
