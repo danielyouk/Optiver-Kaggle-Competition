@@ -7,7 +7,9 @@ library(tictoc)
 library(reticulate)
 library(arrow)
 library(tictoc)
-
+library(readr)
+library(tidymodels)
+library(lightgbm)
 list.of.packages <- c(
   "foreach",
   "doParallel",
@@ -31,6 +33,35 @@ for(package.i in list.of.packages){
     )
   )
 }
+
+list.of.packages <- c(
+  "janitor",
+  "dplyr",
+  "ggplot2",
+  "rsample",
+  "recipes",
+  "parsnip",
+  "tune",
+  "dials",
+  "workflows",
+  "yardstick",
+  "treesnip"
+)
+
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+
+if(length(new.packages) > 0){
+  install.packages(new.packages, dep=TRUE)
+}
+
+for(package.i in list.of.packages){
+  suppressPackageStartupMessages(
+    library(
+      package.i, 
+      character.only = TRUE
+    )
+  )
+}
 # file_name <- list.files('./input/optiver-realized-volatility-prediction/book_train.parquet/stock_id=0')
 # book_example <- read_parquet(paste0("./input/optiver-realized-volatility-prediction/book_train.parquet/stock_id=0/",file_name)) %>% as.data.table()
 # file_name <- list.files('./input/optiver-realized-volatility-prediction/trade_train.parquet/stock_id=0')
@@ -38,7 +69,7 @@ for(package.i in list.of.packages){
 
 root_dir <- './input/optiver-realized-volatility-prediction/book_train.parquet'
 stock_id_list <- list.files(root_dir)
-# 1. book data processing ----
+# 1. data processing ----
 preprocessor <- function (stock_id){
   #stock_id <- "stock_id=0"
   file_name <- list.files(paste0("./input/optiver-realized-volatility-prediction/book_train.parquet/",stock_id))
@@ -128,7 +159,7 @@ preprocessor <- function (stock_id){
                 values_from = c(log_return1_realized_volatility,log_return2_realized_volatility,log_return3_realized_volatility,log_return4_realized_volatility))
   
   
-  # 2. trade data processing ----
+
   trade_example[,row_id:=paste0(stock_id,"-",time_id)]
   trade_example[,price_lag := shift(.SD, 1, NA, "lag"), .SDcols=c("price"), by=.(row_id)]
   trade_example[,log_return:=log(price/price_lag)]
@@ -210,20 +241,21 @@ preprocessor <- function (stock_id){
   return(train)
 }
 
-tic()
-train <- data.table()
-i <-0
-for (stock_id_input in stock_id_list[1:10]){
-  i <- i +1; t1 <- Sys.time()
-  train_each <- preprocessor(stock_id = stock_id_input)
-  train <- rbind(train, train_each)
-  t2 <- Sys.time()
-  timediff <- difftime(t2,t1, units = "secs")
-  print(paste0(i, " duration ",timediff, " sec"))
-  
-}
-toc()
+# tic()
+# train <- data.table()
+# i <-0
+# for (stock_id_input in stock_id_list[1:10]){
+#   i <- i +1; t1 <- Sys.time()
+#   train_each <- preprocessor(stock_id = stock_id_input)
+#   train <- rbind(train, train_each)
+#   t2 <- Sys.time()
+#   timediff <- difftime(t2,t1, units = "secs")
+#   print(paste0(i, " duration ",timediff, " sec"))
+#   
+# }
+# toc()
 
+# 2. dopar processing ----
 parallel::detectCores()
 n.cores <- parallel::detectCores() - 1
 my.cluster <- parallel::makeCluster(
@@ -235,7 +267,7 @@ print(my.cluster)
 tic()
 doParallel::registerDoParallel(cl = my.cluster)
 
-train <- foreach(
+train_ <- foreach(
   stock_id_input = stock_id_list,
   .combine = "rbind",
   .packages = c("tidyverse","data.table","arrow")
@@ -250,3 +282,130 @@ toc()
 # 
 # setdiff(cols_python_object, cols_r_object)
 # setdiff(cols_r_object, cols_python_object)
+
+train <- read_csv("input/optiver-realized-volatility-prediction/train.csv") %>% as.data.table()
+train[,row_id:=paste0(stock_id,"-",time_id)]
+train <- merge(train_, train[,-c("stock_id","time_id")], by=c("row_id"), all.x = T)
+
+train[,size_tau:=sqrt(1/trade_seconds_in_bucket_count_unique)]
+train[,size_tau_500:=sqrt(1/trade_seconds_in_bucket_count_unique_500)]
+train[,size_tau_400:=sqrt(1/trade_seconds_in_bucket_count_unique_400)]
+train[,size_tau_300:=sqrt(1/trade_seconds_in_bucket_count_unique_300)]
+train[,size_tau_200:=sqrt(1/trade_seconds_in_bucket_count_unique_200)]
+train[,size_tau_100:=sqrt(1/trade_seconds_in_bucket_count_unique_100)]
+
+rmspe_vec <- function(truth, estimate, na_rm = TRUE, ...) {
+  
+  rmspe_impl <- function(truth, estimate) {
+    sqrt(mean(((truth - estimate)/truth) ^ 2))
+  }
+  
+  metric_vec_template(
+    metric_impl = rmspe_impl,
+    truth = truth, 
+    estimate = estimate,
+    na_rm = na_rm,
+    cls = "numeric",
+    ...
+  )
+  
+}
+
+rmspe_vec(truth = c(NA, .5, .4), estimate = c(1,.6,.5))
+
+library(rlang)
+
+rmspe <- function(data, ...) {
+  UseMethod("rmspe")
+}
+
+rmspe <- new_numeric_metric(rmspe, direction = "minimize")
+
+rmspe.data.frame <- function(data, truth, estimate, na_rm = TRUE, ...) {
+  
+  metric_summarizer(
+    metric_nm = "rmspe",
+    metric_fn = rmspe_vec,
+    data = data,
+    truth = !! enquo(truth),
+    estimate = !! enquo(estimate), 
+    na_rm = na_rm,
+    ...
+  )
+  
+}
+
+
+
+Optiver_data_split <- rsample::initial_split(
+  train,
+  prop = 0.8,
+  strata = target
+)
+
+preprocessing_recipe <-
+  recipes::recipe(target ~ ., data = training(Optiver_data_split)) %>%
+  recipes::step_rm(row_id) %>% 
+  recipes::step_normalize(all_numeric()) %>%
+  prep()
+
+Optiver_data_cv_folds <-
+  recipes::bake(
+    preprocessing_recipe,
+    new_data = training(Optiver_data_split)
+  ) %>%
+  rsample::vfold_cv(v = 5)
+
+
+
+lightgbm_model<-
+  parsnip::boost_tree(
+    mode = "regression",
+    trees = 1000,
+    min_n = tune(),
+    tree_depth = tune(),
+  ) %>%
+  set_engine("lightgbm")
+
+lightgbm_params <-
+  dials::parameters(
+    # The parameters have sane defaults, but if you have some knowledge 
+    # of the process you can set upper and lower limits to these parameters.
+    min_n(), # 2nd important
+    tree_depth() # 3rd most important
+  )
+
+set.seed(1234)
+lgbm_grid <-
+  dials::grid_max_entropy(
+    lightgbm_params,
+    size = 30 # set this to a higher number to get better results
+    # I don't want to run this all night, so I set it to 30
+  )
+head(lgbm_grid)
+
+lgbm_wf <-
+  workflows::workflow() %>%
+  add_model(lightgbm_model
+  ) %>%
+  add_formula(target ~ .)
+
+unregister_dopar <- function() {
+  env <- foreach:::.foreachGlobals
+  rm(list=ls(name=env), pos=env)
+}
+tic()
+doParallel::registerDoParallel(cl = my.cluster)
+unregister_dopar()
+lgbm_tuned <- tune::tune_grid(
+  object = lgbm_wf,
+  resamples = Optiver_data_cv_folds,
+  grid = lgbm_grid,
+  metrics = yardstick::metric_set(rmse, mae),
+  control = tune::control_grid(verbose = FALSE) # set this to TRUE to see
+  # in what step of the process you are. But that doesn't look that well in
+  # a blog.
+)
+
+parallel::stopCluster(cl = my.cluster)
+toc()
