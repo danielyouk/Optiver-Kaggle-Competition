@@ -76,6 +76,132 @@ preprocessor <- function (stock_id){
   book_example <- read_parquet(paste0("./input/optiver-realized-volatility-prediction/book_train.parquet/",stock_id,"/",file_name)) %>% as.data.table()
   file_name <- list.files(paste0("./input/optiver-realized-volatility-prediction/trade_train.parquet/",stock_id))
   trade_example <- read_parquet(paste0("./input/optiver-realized-volatility-prediction/trade_train.parquet/",stock_id,"/",file_name)) %>% as.data.table()
+  
+  book_trade_merge_example <- merge(book_example,trade_example,by=c("time_id","seconds_in_bucket"), all = TRUE)
+  
+  #####
+  
+  trial_case <- book_trade_merge_example[time_id==5]
+  trial_case[, WAP1:=(bid_price1*ask_size1 + ask_price1 * bid_size1)/(bid_size1 + ask_size1)]
+  trial_case[, WAP2:=(bid_price2*ask_size2 + ask_price2 * bid_size2)/(bid_size2 + ask_size2)]
+  trial_case[, BidAskSpread1:= ask_price1 - bid_price1]
+  trial_case[, BidAskMargin1:= (BidAskSpread1/ask_price1)*100]
+  trial_case[, BidAskSpread2:= ask_price2 - bid_price2]
+  trial_case[, BidAskMargin2:= (BidAskSpread2/ask_price2)*100]
+  trial_case[, count_BuySell:=ifelse(is.na(order_count),0,1)]
+  
+  trial_case[, ask_price1_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("ask_price1"), by=.(time_id)]
+  trial_case[, ask_price2_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("ask_price2"), by=.(time_id)]
+  trial_case[, bid_price1_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("bid_price1"), by=.(time_id)]
+  trial_case[, bid_price2_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("bid_price2"), by=.(time_id)]  
+  trial_case[, WAP1_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("WAP1"), by=.(time_id)]
+  trial_case[, WAP2_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("WAP2"), by=.(time_id)]
+  trial_case[, bid_size1_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("bid_size1"), by=.(time_id)]
+  trial_case[, ask_size1_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("ask_size1"), by=.(time_id)]
+  trial_case[, bid_size2_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("bid_size2"), by=.(time_id)]
+  trial_case[, ask_size2_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("ask_size2"), by=.(time_id)]
+  trial_case[, price_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("price"), by=.(time_id)]
+  trial_case[, size_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("size"), by=.(time_id)]
+  trial_case[, order_count_lag:= shift(.SD, 1, NA, "lag"), .SDcols=c("order_count"), by=.(time_id)]
+  
+  trial_case_summary <- 
+    trial_case[, list(
+      
+      ask_price1_start = first(na.omit(ask_price1)),
+      ask_price1_max = max(ask_price1, na.rm = T),
+      ask_price1_min = min(ask_price1, na.rm = T),
+      ask_price1_last = last(na.omit(ask_price1)),
+      ask_price1_log_return_volatility = sqrt(sum(log((ask_price1/ask_price1_lag))**2, na.rm = T)),     
+  
+      ask_price2_start = first(na.omit(ask_price2)),
+      ask_price2_max = max(ask_price2, na.rm = T),
+      ask_price2_min = min(ask_price2, na.rm = T),
+      ask_price2_last = last(na.omit(ask_price2)),
+      ask_price2_log_return_volatility = sqrt(sum(log((ask_price2/ask_price2_lag))**2, na.rm = T)),  
+ 
+      bid_price1_start = first(na.omit(bid_price1)),
+      bid_price1_max = max(bid_price1, na.rm = T),
+      bid_price1_min = min(bid_price1, na.rm = T),
+      bid_price1_last = last(na.omit(bid_price1)),
+      bid_price1_log_return_volatility = sqrt(sum(log((bid_price1/bid_price1_lag))**2, na.rm = T)),     
+      
+      bid_price2_start = first(na.omit(bid_price2)),
+      bid_price2_max = max(bid_price2, na.rm = T),
+      bid_price2_min = min(bid_price2, na.rm = T),
+      bid_price2_last = last(na.omit(bid_price2)),
+      bid_price2_log_return_volatility = sqrt(sum(log((bid_price2/bid_price2_lag))**2, na.rm = T)), 
+      
+      WAP1_start = first(na.omit(WAP1)),
+      WAP1_max = max(WAP1, na.rm = T),
+      WAP1_min = min(WAP1, na.rm = T),
+      WAP1_last = last(na.omit(WAP1)),
+      WAP1_log_return_volatility = sqrt(sum(log((WAP1/WAP1_lag))**2, na.rm = T)),
+      
+      WAP2_start = first(na.omit(WAP2)),
+      WAP2_max = max(WAP2, na.rm = T),
+      WAP2_min = min(WAP2, na.rm = T),
+      WAP2_last = last(na.omit(WAP2)),
+      WAP2_log_return_volatility = sqrt(sum(log((WAP2/WAP2_lag))**2, na.rm = T)),
+      
+      bid_size1_start = first(na.omit(bid_size1)),
+      bid_size1_max = max(bid_size1, na.rm = T),
+      bid_size1_min = min(bid_size1, na.rm = T),
+      bid_size1_last = last(na.omit(bid_size1)),     
+      bid_size1_log_return_volatility = sqrt(sum(log((bid_size1/bid_size1_lag))**2, na.rm = T)),
+      
+      bid_size2_start = first(na.omit(bid_size2)),
+      bid_size2_max = max(bid_size2, na.rm = T),
+      bid_size2_min = min(bid_size2, na.rm = T),
+      bid_size2_last = last(na.omit(bid_size2)),     
+      bid_size2_log_return_volatility = sqrt(sum(log((bid_size2/bid_size2_lag))**2, na.rm = T)),
+      
+      ask_size1_start = first(na.omit(ask_size1)),
+      ask_size1_max = max(ask_size1, na.rm = T),
+      ask_size1_min = min(ask_size1, na.rm = T),
+      ask_size1_last = last(na.omit(ask_size1)),  
+      ask_size1_log_return_volatility = sqrt(sum(log((ask_size1/ask_size1_lag))**2, na.rm = T)),
+      
+      ask_size2_start = first(na.omit(ask_size2)),
+      ask_size2_max = max(ask_size2, na.rm = T),
+      ask_size2_min = min(ask_size2, na.rm = T),
+      ask_size2_last = last(na.omit(ask_size2)), 
+      ask_size2_log_return_volatility = sqrt(sum(log((ask_size2/ask_size2_lag))**2, na.rm = T)),
+      
+      price_start = first(na.omit(price)),
+      price_max = max(price, na.rm = T),
+      price_min = min(price, na.rm = T),
+      price_last = last(na.omit(price)), 
+      price_log_return_volatility = sqrt(sum(log((price/price_lag))**2, na.rm = T)),
+      
+      size_start = first(na.omit(size)),
+      size_max = max(size, na.rm = T),
+      size_min = min(size, na.rm = T),
+      size_last = last(na.omit(size)), 
+      size_log_return_volatility = sqrt(sum(log((size/size_lag))**2, na.rm = T)),
+      
+      order_count_start = first(na.omit(order_count)),
+      order_count_max = max(order_count, na.rm = T),
+      order_count_min = min(order_count, na.rm = T),
+      order_count_last = last(na.omit(order_count)),     
+      order_count_log_return_volatility = sqrt(sum(log((order_count/order_count_lag))**2, na.rm = T)),
+      
+      order_sum = sum(order_count, na.rm = T),
+      size_sum = sum(size, na.rm = T),
+      count_BuySell = sum(count_BuySell)
+      ), by=.(time_id)]
+  
+  time_WAP1_max <- trial_case[WAP1 == trial_case_summary$WAP1_max]$seconds_in_bucket %>% first
+  time_WAP1_min <- trial_case[WAP1 == trial_case_summary$WAP1_min]$seconds_in_bucket %>% first
+  time_WAP2_max <- trial_case[WAP2 == trial_case_summary$WAP2_max]$seconds_in_bucket %>% first
+  time_WAP2_min <- trial_case[WAP2 == trial_case_summary$WAP2_min]$seconds_in_bucket %>% first
+  
+  time_book_start <- trial_case$seconds_in_bucket %>% first
+  time_book_last <- trial_case$seconds_in_bucket %>% last
+  time_order_first <- trial_case[price==trial_case_summary$price_start & size==trial_case_summary$size_start]$seconds_in_bucket %>% first
+  time_order_last <- trial_case[price==trial_case_summary$price_last & size==trial_case_summary$size_last]$seconds_in_bucket %>% last
+  #####
+  
+  
   stock_id <- str_split(stock_id,"=")[[1]][2] 
   
   book_example[,row_id:=paste0(stock_id,"-",time_id)]
@@ -240,6 +366,7 @@ preprocessor <- function (stock_id){
   
   return(train)
 }
+
 
 # tic()
 # train <- data.table()
