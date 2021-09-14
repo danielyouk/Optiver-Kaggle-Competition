@@ -78,7 +78,7 @@ root_dir <- './input/optiver-realized-volatility-prediction/book_train.parquet'
 stock_id_list <- list.files(root_dir)
 # 1. data processing ----
 preprocessor <- function (stock_id){
-  #stock_id = "stock_id=19"
+  #stock_id = "stock_id=0"
   file_name <- list.files(paste0("./input/optiver-realized-volatility-prediction/book_train.parquet/",stock_id))
   book_example <- read_parquet(paste0("./input/optiver-realized-volatility-prediction/book_train.parquet/",stock_id,"/",file_name)) %>% as.data.table()
   file_name <- list.files(paste0("./input/optiver-realized-volatility-prediction/trade_train.parquet/",stock_id))
@@ -301,7 +301,7 @@ preprocessor <- function (stock_id){
 
 # 2. dopar processing ----
 parallel::detectCores()
-n.cores <- 4
+n.cores <- 15
 my.cluster <- parallel::makeCluster(
   n.cores, 
   type = "PSOCK"
@@ -335,7 +335,7 @@ train[, stock_id:=as.character(stock_id)]
 train_merge <- merge(train_, train, by=c("stock_id","time_id"), all.x = T)
 saveRDS(train_merge,"./data/train.rds")
 train <- readRDS("./data/train.rds") %>% as.data.table()
-train$time_id <- NULL
+#train$time_id <- NULL
 unregister_dopar <- function() {
   env <- foreach:::.foreachGlobals
   rm(list=ls(name=env), pos=env)
@@ -343,6 +343,7 @@ unregister_dopar <- function() {
 unregister_dopar()
 #train <- cbind(train[,1:30], target = train$target)
 
+train$time_id <- NULL
 train <- train %>% janitor::clean_names()
 train[, transaction:=ifelse(transaction_amount_sum==0,"no","yes")]
 Optiver_split <- rsample::initial_split(
@@ -380,7 +381,7 @@ Optiver_split_eval_x <- Optiver_split_eval[,-c("target")] %>% as.data.frame() %>
 Optiver_split_eval_y <- Optiver_split_eval[,c("target")] %>% as.data.frame() %>% as.matrix()
 
 dtrain <- xgb.DMatrix(Optiver_split_train_x, label=Optiver_split_train_y)
-deval <- xgb.DMatrix(Optiver_split_train_x, label=Optiver_split_train_y)
+deval <- xgb.DMatrix(Optiver_split_eval_x, label=Optiver_split_eval_y)
 
 watchlist <- list(train = dtrain, eval = deval)
 logregobj <- function(preds, dtrain) {
@@ -396,17 +397,35 @@ rmspe  <- function(preds, dtrain) {
   err <- sqrt(mean(((labels-preds)/labels)^2))
   return(list(metric = "rmspe", value = err, higher_better=FALSE))
 }
-param <- list(max_depth = 10, eta = 1)
-bst <- xgb.train(dtrain, nthread = 15, nrounds = 1000, params = param, watchlist, feval = rmspe, objective = "reg:squarederror")
+
+xgb_grid <- grid_latin_hypercube(
+  tree_depth(),
+  min_n(),
+  loss_reduction(),
+  sample_size = sample_prop(),
+  finalize(mtry(), Optiver_split_train),
+  learn_rate(),
+  size = 30
+) %>% as.data.table()
+xgb_grid %>% setnames(c("tree_depth","min_n","loss_reduction","sample_size","learn_rate"),c("max_depth","min_child_weight","gamma","subsample","eta"))
+xgb_grid[, colsample_bytree:=mtry/ncol(Optiver_split_train_x)]
 
 
+i <- 19
 
+params_input <- 
+  list(max_depth = as.integer(xgb_grid[i,1]),
+       min_child_weight = as.double(xgb_grid[i,2]),
+       gamma = xgb_grid[i,3],
+       subsample = xgb_grid[i,4],
+       eta = 0.3,
+       colsample_bytree = as.double(xgb_grid[i,7])
+  )
+bst <- xgb.train(dtrain, 
+                 nthread = 15, nrounds = 1000, params = params_input, watchlist, feval = rmspe, objective = "reg:squarederror",verbose = 1, save_name = "./data/xgb_model",early_stopping_rounds = 15, maximize = F
+                 )
 
-
-importance_matix <- xgb.importance(colnames(Optiver_train_x), model = bst)
-
-xgb.ggplot.importance(importance_matrix = importance_matix, measure = "Importance", rel_to_first = T)
-
+bst_importance <- xgb.importance(colnames(Optiver_split_train[,-c("target")]), model = bst)
 
 Optiver_cv_folds <- 
   # recipes::bake(
@@ -454,5 +473,5 @@ xgboost_tuned <- tune::tune_grid(
   control = tune::control_grid(verbose = TRUE)
 )
 
-# parallel::stopCluster(cl = my.cluster)
+parallel::stopCluster(cl = my.cluster)
 toc()
