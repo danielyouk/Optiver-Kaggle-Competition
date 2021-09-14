@@ -8,7 +8,7 @@ library(reticulate)
 library(arrow)
 library(tictoc)
 library(readr)
-library(tidymodasdfasels)
+library(tidymodels)
 library(lightgbm)
 library(xgboost)
 require(xgboost)
@@ -158,13 +158,13 @@ preprocessor <- function (stock_id){
       ask_price1_min = min(ask_price1, na.rm = T),
       ask_price1_last = last(na.omit(ask_price1)),
       ask_price1_log_return_volatility = sqrt(sum(log((ask_price1/ask_price1_lag))**2, na.rm = T)),     
-  
+      
       ask_price2_start = first(na.omit(ask_price2)),
       ask_price2_max = max(ask_price2, na.rm = T),
       ask_price2_min = min(ask_price2, na.rm = T),
       ask_price2_last = last(na.omit(ask_price2)),
       ask_price2_log_return_volatility = sqrt(sum(log((ask_price2/ask_price2_lag))**2, na.rm = T)),  
- 
+      
       bid_price1_start = first(na.omit(bid_price1)),
       bid_price1_max = max(bid_price1, na.rm = T),
       bid_price1_min = min(bid_price1, na.rm = T),
@@ -236,7 +236,7 @@ preprocessor <- function (stock_id){
       Bid1_Ask1_Spread_min = min(Bid1_Ask1_Spread, na.rm = T),
       Bid1_Ask1_Spread_last = last(na.omit(Bid1_Ask1_Spread)),     
       Bid1_Ask1_Spread_log_return_volatility = sqrt(sum(log((Bid1_Ask1_Spread/Bid1_Ask1_Spread_lag))**2, na.rm = T)),
-
+      
       Bid1_Ask1_Margin_start = first(na.omit(Bid1_Ask1_Margin)),
       Bid1_Ask1_Margin_max = max(Bid1_Ask1_Margin, na.rm = T),
       Bid1_Ask1_Margin_min = min(Bid1_Ask1_Margin, na.rm = T),
@@ -260,7 +260,7 @@ preprocessor <- function (stock_id){
       WAP1_price_Spread_q1 = quantile(WAP1_price_Spread, prob = 0.25, na.rm=T),
       WAP1_price_Spread_mean = mean(WAP1_price_Spread, na.rm=T),
       WAP1_price_Spread_q3 = quantile(WAP1_price_Spread, prob = 0.75, na.rm=T),
-  
+      
       WAP1_price_Margin_max = max(WAP1_price_Margin, na.rm = T),
       WAP1_price_Margin_min = min(WAP1_price_Margin, na.rm = T),
       WAP1_price_Margin_q1 = quantile(WAP1_price_Margin, prob = 0.25, na.rm=T),
@@ -271,7 +271,7 @@ preprocessor <- function (stock_id){
       size_sum = sum(size, na.rm = T) %>% as.integer(),
       transaction_count = sum(count_BuySell) %>% as.integer(),
       transaction_amount_sum = sum(transaction_amount, na.rm = T)
-      ), by=.(time_id)]
+    ), by=.(time_id)]
   
   
   
@@ -343,7 +343,7 @@ unregister_dopar <- function() {
 unregister_dopar()
 #train <- cbind(train[,1:30], target = train$target)
 
-train
+train$time_id <- NULL
 train <- train %>% janitor::clean_names()
 train[, transaction:=ifelse(transaction_amount_sum==0,"no","yes")]
 Optiver_split <- rsample::initial_split(
@@ -423,7 +423,7 @@ params_input <-
   )
 bst <- xgb.train(dtrain, 
                  nthread = 15, nrounds = 1000, params = params_input, watchlist, feval = rmspe, objective = "reg:squarederror",verbose = 1, save_name = "./data/xgb_model",early_stopping_rounds = 15, maximize = F
-                 )
+)
 
 bst_importance <- xgb.importance(colnames(Optiver_split_train[,-c("target")]), model = bst)
 
