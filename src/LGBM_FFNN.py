@@ -1023,7 +1023,7 @@ for fold, (trn_ind, val_ind) in enumerate(kfold.split(train_nn)):
               callbacks=[es, plateau],
               validation_batch_size=len(y_test),
               shuffle=True,
-             verbose = 1)
+             verbose = 0)
 
     preds = model.predict([cat_data_test, num_data_test]).reshape(1,-1)[0]
     oof_predictions_nn[val_ind] = preds
@@ -1039,25 +1039,42 @@ for fold, (trn_ind, val_ind) in enumerate(kfold.split(train_nn)):
     counter += 1
     features_to_consider.append('stock_id')
     
-    
 
-from numpy.random import seed
-seed(41)
-import tensorflow as tf
-tf.random.set_seed(41)
-from tensorflow import keras
+
+##### TabNEt
+cat_idxs = [194]
+cat_dims = [112]
 
 target_name='target'
 scores_folds = {}
-model_name = 'NN'
+model_name = 'TabNet'
 pred_name = 'pred_{}'.format(model_name)
 
-n_folds = 5
-kf = model_selection.KFold(n_splits=n_folds, shuffle=True, random_state=2021)
+tabnet_params = dict(
+    cat_idxs=cat_idxs,
+    cat_dims=cat_dims,
+    cat_emb_dim=1,
+    n_d = 16,
+    n_a = 16,
+    n_steps = 2,
+    gamma = 2,
+    n_independent = 2,
+    n_shared = 2,
+    lambda_sparse = 0,
+    optimizer_fn = Adam,
+    optimizer_params = dict(lr = (2e-2)),
+    mask_type = "entmax",
+    scheduler_params = dict(T_0=200, T_mult=1, eta_min=1e-4, last_epoch=-1, verbose=False),
+    scheduler_fn = CosineAnnealingWarmRestarts,
+    seed = 42,
+    verbose = 10
+    
+)
+
 scores_folds[model_name] = []
 counter = 1
 
-features_to_consider = list(train1)
+features_to_consider = list(train_nn)
 
 features_to_consider.remove('time_id')
 features_to_consider.remove('target')
@@ -1067,74 +1084,60 @@ except:
     pass
 
 
-train1[features_to_consider] = train1[features_to_consider].fillna(train1[features_to_consider].mean())
-test1[features_to_consider] = test1[features_to_consider].fillna(train1[features_to_consider].mean())
+train_nn[features_to_consider] = train_nn[features_to_consider].fillna(train_nn[features_to_consider].mean())
+test_nn[features_to_consider] = test_nn[features_to_consider].fillna(train_nn[features_to_consider].mean())
 
-train1[pred_name] = 0
-test1[target_name] = 0
-test_predictions_nn1 = np.zeros(test_nn.shape[0])
+train_nn[pred_name] = 0
+test_nn[target_name] = 0
+test_predictions_Tabnet = np.zeros(test_nn.shape[0])
+oof_predictions_Tabnet = np.zeros(train_nn.shape[0])
+kfold = KFold(n_splits = 5, random_state = 7998, shuffle = True)
 
-for n_count in range(n_folds):
-    print('CV {}/{}'.format(counter, n_folds))
+
+
+for fold, (trn_ind, val_ind) in enumerate(kfold.split(train_nn)):
     
-    indexes = np.arange(nfolds).astype(int)    
-    indexes = np.delete(indexes,obj=n_count, axis=0) 
+    print(f'Training fold {fold + 1}')
     
-    indexes = np.r_[values[indexes[0]],values[indexes[1]],values[indexes[2]],values[indexes[3]]]
-    
-    X_train = train1.loc[train1.time_id.isin(indexes), features_to_consider]
-    y_train = train1.loc[train1.time_id.isin(indexes), target_name]
-    X_test = train1.loc[train1.time_id.isin(values[n_count]), features_to_consider]
-    y_test = train1.loc[train1.time_id.isin(values[n_count]), target_name]
-    
+    X_train, X_val = train_nn.loc[trn_ind, features_to_consider], train_nn.loc[val_ind, features_to_consider]
+    y_train, y_val = train_nn.loc[trn_ind, target_name], train_nn.loc[val_ind, target_name]
     #############################################################################################
-    # NN
+    # TabNet
     #############################################################################################
-    
-    model = base_model()
-    
-    model.compile(
-        keras.optimizers.Adam(learning_rate=0.006),
-        loss=root_mean_squared_per_error
-    )
-    
-    try:
-        features_to_consider.remove('stock_id')
-    except:
-        pass
-    
-    num_data = X_train[features_to_consider]
     
     scaler = MinMaxScaler(feature_range=(-1, 1))         
-    num_data = scaler.fit_transform(num_data.values)    
+    num_data = scaler.fit_transform(X_train.values)    
     
     cat_data = X_train['stock_id']    
     target =  y_train
     
     num_data_test = X_test[features_to_consider]
     num_data_test = scaler.transform(num_data_test.values)
-    cat_data_test = X_test['stock_id']
-
-    model.fit([cat_data, num_data], 
-              target,               
-              batch_size=2048,
-              epochs=1000,
-              validation_data=([cat_data_test, num_data_test], y_test),
-              callbacks=[es, plateau],
-              validation_batch_size=len(y_test),
-              shuffle=True,
-             verbose = 1)
-
-    preds = model.predict([cat_data_test, num_data_test]).reshape(1,-1)[0]
     
-    score = round(rmspe(y_true = y_test, y_pred = preds),5)
+    clf =  TabNetRegressor(**tabnet_params)
+    clf.fit(
+      X_train, y_train,
+      eval_set=[(X_val, y_val)],
+      max_epochs = 200,
+      patience = 50,
+      batch_size = 1024*20, 
+      virtual_batch_size = 128*20,
+      num_workers = 4,
+      drop_last = False,
+      eval_metric=[RMSPE],
+      loss_fn=RMSPELoss
+      )
+
+    preds = clf.predict(X_val).reshape(1,-1)[0]
+    oof_predictions_Tabnet[val_ind] = preds
+    score = round(rmspe(y_true = y_val, y_pred = preds),5)
     print('Fold {} {}: {}'.format(counter, model_name, score))
     scores_folds[model_name].append(score)
     
     tt =scaler.transform(test_nn[features_to_consider].values)
     #test_nn[target_name] += model.predict([test_nn['stock_id'], tt]).reshape(1,-1)[0].clip(0,1e10)
-    test_predictions_nn1 += model.predict([test1['stock_id'], tt]).reshape(1,-1)[0].clip(0,1e10)/n_folds
+    test_predictions_Tabnet += model.predict([test_nn['stock_id'], tt]).reshape(1,-1)[0].clip(0,1e10)/n_folds
     #test[target_name] += model.predict([test['stock_id'], test[features_to_consider]]).reshape(1,-1)[0].clip(0,1e10)
        
     counter += 1
-    features_to_consider.append('stock_id')
+    features_to_consider.append('stock_id')    
