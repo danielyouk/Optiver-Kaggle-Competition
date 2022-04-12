@@ -15,6 +15,7 @@ require(xgboost)
 require(Matrix)
 require(data.table)
 library(Ckmeans.1d.dp)
+library(song)
 if (!require('vcd')) install.packages('vcd')
 
 list.of.packages <- c(
