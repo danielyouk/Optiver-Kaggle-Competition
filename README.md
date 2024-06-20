@@ -30,5 +30,5 @@ Opriver-Kaggle-Competition/
 To use the scripts in this repository, clone it locally using the following Git command:
 
 ```bash
-git clone https://github.com/danielyouk/Opriver-Kaggle-Competition.git
+git clone https://github.com/danielyouk/Optiver-Kaggle-Competition.git
 ```
